@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MedVault - Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">MedVault</a>
+            <div class="d-flex">
+                <span class="navbar-text me-3">Welcome, {{ user['name'] }} ({{ user['role']|capitalize }})</span>
+                <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        {% if user['role'] == 'patient' %}
+            <!-- Patient Section: File Upload -->
+            <div class="card shadow p-4 mb-4">
+                <h5 class="mb-3">Upload Medical Report</h5>
+                <form action="/upload" method="POST" enctype="multipart/form-data">
+                    <div class="input-group">
+                        <input type="file" name="report" class="form-control" required>
+                        <button type="submit" class="btn btn-primary">Upload</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Patient Section: Uploaded Reports -->
+            <div class="card shadow p-4 mb-4">
+                <h5 class="mb-3">Your Medical Reports</h5>
+                {% if reports %}
+                    <ul class="list-group">
+                        {% for report in reports %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <span>{{ report['file_name'] }}</span>
+                                <a href="/view/{{ report['id'] }}" class="btn btn-sm btn-outline-primary" target="_blank">View</a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="text-muted">No reports uploaded yet.</p>
+                {% endif %}
+            </div>
+
+            <!-- Patient Section: Prescribed Medications -->
+            <div class="card shadow p-4 mb-4">
+                <h5 class="mb-3">Your Prescribed Medications</h5>
+                {% if medications %}
+                    <ul class="list-group">
+                        {% for med in medications %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>{{ med['medication_name'] }}</strong> ({{ med['dosage'] }})<br>
+                                    <small class="text-muted">Instructions: {{ med['instructions'] }}</small>
+                                </div>
+                                <span class="badge bg-info text-dark">Prescribed</span>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="text-muted">No medications prescribed by your doctor yet.</p>
+                {% endif %}
+            </div>
+
+        {% elif user['role'] == 'doctor' %}
+            <!-- Doctor Section: Assigned Patients -->
+            <div class="card shadow p-4 mb-4">
+                <h5 class="mb-3">Assigned Patients</h5>
+                {% if patients %}
+                    <ul class="list-group">
+                        {% for patient in patients %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>{{ patient['name'] }}</strong><br>
+                                    <small class="text-muted">{{ patient['email'] }}</small>
+                                </div>
+                                <a href="/doctor/patient/{{ patient['id'] }}" class="btn btn-sm btn-primary">View Records & Prescribe</a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="text-muted">No patients assigned to you yet.</p>
+                {% endif %}
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>

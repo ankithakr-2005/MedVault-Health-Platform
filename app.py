@@ -1,9 +1,9 @@
 import os
+import mysql.connector
 from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, abort, flash
 from flask_bcrypt import Bcrypt
 from werkzeug.utils import secure_filename
 from utils.db import init_db, get_db_connection
-sqlite3 = __import__('sqlite3')
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'
@@ -26,6 +26,8 @@ def home():
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
     if request.method == 'POST':
         name = request.form['name']
         email = request.form['email']
@@ -35,26 +37,29 @@ def register():
 
         hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
 
-        cursor = conn.cursor()
         try:
-            cursor.execute("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
+            cursor.execute("INSERT INTO users (name, email, password, role) VALUES (%s, %s, %s, %s)",
                            (name, email, hashed_password, role))
             user_id = cursor.lastrowid
 
             if role == 'patient' and doctor_id:
-                cursor.execute("INSERT INTO doctor_patients (doctor_id, patient_id) VALUES (?, ?)",
+                cursor.execute("INSERT INTO doctor_patients (doctor_id, patient_id) VALUES (%s, %s)",
                                (doctor_id, user_id))
 
             conn.commit()
-        except sqlite3.IntegrityError:
+        except mysql.connector.Error as err:
+            cursor.close()
             conn.close()
-            flash("Error: Email address already exists!", "danger")
+            flash("Error: Email address already exists or database error occurred!", "danger")
             return redirect(url_for('register'))
         
+        cursor.close()
         conn.close()
         return redirect(url_for('login'))
 
-    doctors = conn.execute("SELECT id, name, email FROM users WHERE role = 'doctor'").fetchall()
+    cursor.execute("SELECT id, name, email FROM users WHERE role = 'doctor'")
+    doctors = cursor.fetchall()
+    cursor.close()
     conn.close()
     return render_template('register.html', doctors=doctors)
 
@@ -65,7 +70,10 @@ def login():
         password = request.form['password']
 
         conn = get_db_connection()
-        user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+        cursor.close()
         conn.close()
 
         if user and bcrypt.check_password_hash(user['password'], password):
@@ -84,22 +92,30 @@ def dashboard():
         return redirect(url_for('login'))
 
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM users WHERE id = ?", (session['user_id'],)).fetchone()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute("SELECT * FROM users WHERE id = %s", (session['user_id'],))
+    user = cursor.fetchone()
     
     reports = []
     patients = []
     medications = []
 
     if user['role'] == 'patient':
-        reports = conn.execute("SELECT * FROM reports WHERE patient_id = ?", (session['user_id'],)).fetchall()
-        medications = conn.execute("SELECT * FROM medications WHERE patient_id = ?", (session['user_id'],)).fetchall()
+        cursor.execute("SELECT * FROM reports WHERE patient_id = %s", (session['user_id'],))
+        reports = cursor.fetchall()
+        
+        cursor.execute("SELECT * FROM medications WHERE patient_id = %s", (session['user_id'],))
+        medications = cursor.fetchall()
     elif user['role'] == 'doctor':
-        patients = conn.execute('''
+        cursor.execute('''
             SELECT u.id, u.name, u.email FROM users u
             JOIN doctor_patients dp ON u.id = dp.patient_id
-            WHERE dp.doctor_id = ?
-        ''', (session['user_id'],)).fetchall()
+            WHERE dp.doctor_id = %s
+        ''', (session['user_id'],))
+        patients = cursor.fetchall()
 
+    cursor.close()
     conn.close()
     return render_template('dashboard.html', user=user, reports=reports, patients=patients, medications=medications)
 
@@ -109,19 +125,29 @@ def view_patient_reports(patient_id):
         return redirect(url_for('login'))
 
     conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
     
-    assignment = conn.execute('''
+    cursor.execute('''
         SELECT * FROM doctor_patients 
-        WHERE doctor_id = ? AND patient_id = ?
-    ''', (session['user_id'], patient_id)).fetchone()
+        WHERE doctor_id = %s AND patient_id = %s
+    ''', (session['user_id'], patient_id))
+    assignment = cursor.fetchone()
 
     if not assignment:
+        cursor.close()
         conn.close()
         return abort(403)
 
-    patient = conn.execute("SELECT * FROM users WHERE id = ?", (patient_id,)).fetchone()
-    reports = conn.execute("SELECT * FROM reports WHERE patient_id = ?", (patient_id,)).fetchall()
-    medications = conn.execute("SELECT * FROM medications WHERE patient_id = ?", (patient_id,)).fetchall()
+    cursor.execute("SELECT * FROM users WHERE id = %s", (patient_id,))
+    patient = cursor.fetchone()
+    
+    cursor.execute("SELECT * FROM reports WHERE patient_id = %s", (patient_id,))
+    reports = cursor.fetchall()
+    
+    cursor.execute("SELECT * FROM medications WHERE patient_id = %s", (patient_id,))
+    medications = cursor.fetchall()
+    
+    cursor.close()
     conn.close()
 
     return render_template('patient_reports.html', patient=patient, reports=reports, medications=medications)
@@ -132,13 +158,16 @@ def prescribe_medication(patient_id):
         return redirect(url_for('login'))
 
     conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
     
-    assignment = conn.execute('''
+    cursor.execute('''
         SELECT * FROM doctor_patients 
-        WHERE doctor_id = ? AND patient_id = ?
-    ''', (session['user_id'], patient_id)).fetchone()
+        WHERE doctor_id = %s AND patient_id = %s
+    ''', (session['user_id'], patient_id))
+    assignment = cursor.fetchone()
 
     if not assignment:
+        cursor.close()
         conn.close()
         return abort(403)
 
@@ -146,11 +175,13 @@ def prescribe_medication(patient_id):
     dosage = request.form['dosage']
     instructions = request.form['instructions']
 
-    conn.execute('''
+    cursor.execute('''
         INSERT INTO medications (patient_id, doctor_id, medication_name, dosage, instructions)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
     ''', (patient_id, session['user_id'], med_name, dosage, instructions))
     conn.commit()
+    
+    cursor.close()
     conn.close()
 
     return redirect(url_for('view_patient_reports', patient_id=patient_id))
@@ -174,9 +205,11 @@ def upload_file():
         file.save(file_path)
 
         conn = get_db_connection()
-        conn.execute("INSERT INTO reports (patient_id, file_name) VALUES (?, ?)",
-                     (session['user_id'], unique_filename))
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO reports (patient_id, file_name) VALUES (%s, %s)",
+                       (session['user_id'], unique_filename))
         conn.commit()
+        cursor.close()
         conn.close()
 
         return redirect(url_for('dashboard'))
@@ -189,24 +222,32 @@ def view_report(report_id):
         return redirect(url_for('login'))
 
     conn = get_db_connection()
-    report = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute("SELECT * FROM reports WHERE id = %s", (report_id,))
+    report = cursor.fetchone()
     
     if not report:
+        cursor.close()
         conn.close()
         return abort(404)
 
     if session['role'] == 'doctor':
-        assignment = conn.execute('''
+        cursor.execute('''
             SELECT * FROM doctor_patients 
-            WHERE doctor_id = ? AND patient_id = ?
-        ''', (session['user_id'], report['patient_id'])).fetchone()
+            WHERE doctor_id = %s AND patient_id = %s
+        ''', (session['user_id'], report['patient_id']))
+        assignment = cursor.fetchone()
         if not assignment:
+            cursor.close()
             conn.close()
             return abort(403)
     elif session['role'] == 'patient' and report['patient_id'] != session['user_id']:
+        cursor.close()
         conn.close()
         return abort(403)
 
+    cursor.close()
     conn.close()
     return send_from_directory(app.config['UPLOAD_FOLDER'], report['file_name'])
 
